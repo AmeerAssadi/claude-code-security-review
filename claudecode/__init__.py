@@ -12,11 +12,13 @@ __author__ = "Anthropic Security Team"
 from claudecode.github_action_audit import (
     GitHubActionClient,
     SimpleClaudeRunner,
-    main
+    main,
 )
+from claudecode.gitlab_ci_client import GitLabCIClient
 
 __all__ = [
     "GitHubActionClient",
+    "GitLabCIClient",
     "SimpleClaudeRunner",
-    "main"
+    "main",
 ]
