@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""GitLab API client for GitLab CI environment."""
+
+import os
+import sys
+from typing import Dict, Any, List
+import requests
+import re
+
+
+class GitLabCIClient:
+    """Simplified GitLab API client for GitLab CI environment."""
+
+    def __init__(self) -> None:
+        """Initialize GitLab client using environment variables."""
+        self.gitlab_token = os.environ.get("GITLAB_TOKEN")
+        if not self.gitlab_token:
+            raise ValueError("GITLAB_TOKEN environment variable required")
+
+        self.base_url = os.environ.get("CI_API_V4_URL", "https://gitlab.com/api/v4")
+        self.headers = {
+            "PRIVATE-TOKEN": self.gitlab_token,
+            "Accept": "application/json",
+        }
+
+        exclude_dirs = os.environ.get("EXCLUDE_DIRECTORIES", "")
+        self.excluded_dirs = [d.strip() for d in exclude_dirs.split(",") if d.strip()] if exclude_dirs else []
+        if self.excluded_dirs:
+            print(f"[Debug] Excluded directories: {self.excluded_dirs}", file=sys.stderr)
+
+    def get_mr_data(self, project_id: str, mr_iid: int) -> Dict[str, Any]:
+        """Get merge request metadata and file changes from GitLab."""
+        mr_url = f"{self.base_url}/projects/{project_id}/merge_requests/{mr_iid}"
+        response = requests.get(mr_url, headers=self.headers)
+        response.raise_for_status()
+        mr_data = response.json()
+
+        changes_url = f"{mr_url}/changes"
+        response = requests.get(changes_url, headers=self.headers)
+        response.raise_for_status()
+        changes = response.json().get("changes", [])
+
+        files: List[Dict[str, Any]] = []
+        total_additions = 0
+        total_deletions = 0
+        for change in changes:
+            filename = change.get("new_path") or change.get("old_path")
+            if not filename or self._is_excluded(filename):
+                continue
+
+            diff = change.get("diff", "")
+            additions = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+            deletions = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+            total_additions += additions
+            total_deletions += deletions
+
+            if change.get("new_file"):
+                status = "added"
+            elif change.get("deleted_file"):
+                status = "removed"
+            elif change.get("renamed_file"):
+                status = "renamed"
+            else:
+                status = "modified"
+
+            files.append({
+                "filename": filename,
+                "status": status,
+                "additions": additions,
+                "deletions": deletions,
+                "changes": additions + deletions,
+                "patch": diff,
+            })
+
+        return {
+            "iid": mr_data["iid"],
+            "title": mr_data["title"],
+            "description": mr_data.get("description", ""),
+            "author": mr_data["author"]["username"],
+            "state": mr_data["state"],
+            "source_branch": mr_data["source_branch"],
+            "target_branch": mr_data["target_branch"],
+            "created_at": mr_data["created_at"],
+            "updated_at": mr_data["updated_at"],
+            "files": files,
+            "additions": total_additions,
+            "deletions": total_deletions,
+            "changed_files": len(files),
+        }
+
+    def get_mr_diff(self, project_id: str, mr_iid: int) -> str:
+        """Get complete merge request diff in unified format."""
+        url = f"{self.base_url}/projects/{project_id}/merge_requests/{mr_iid}"
+        headers = dict(self.headers)
+        headers["Accept"] = "text/plain"
+
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return self._filter_generated_files(response.text)
+
+    def _is_excluded(self, filepath: str) -> bool:
+        """Check if a file should be excluded based on directory patterns."""
+        for excluded_dir in self.excluded_dirs:
+            if excluded_dir.startswith("./"):
+                normalized_excluded = excluded_dir[2:]
+            else:
+                normalized_excluded = excluded_dir
+
+            if filepath.startswith(excluded_dir + "/"):
+                return True
+            if filepath.startswith(normalized_excluded + "/"):
+                return True
+            if "/" + normalized_excluded + "/" in filepath:
+                return True
+        return False
+
+    def _filter_generated_files(self, diff_text: str) -> str:
+        """Filter out generated files and excluded directories from diff content."""
+        file_sections = re.split(r"(?=^diff --git)", diff_text, flags=re.MULTILINE)
+        filtered_sections = []
+
+        for section in file_sections:
+            if not section.strip():
+                continue
+
+            if (
+                "@generated by" in section
+                or "@generated" in section
+                or "Code generated by OpenAPI Generator" in section
+                or "Code generated by protoc-gen-go" in section
+            ):
+                continue
+
+            match = re.match(r"^diff --git a/(.*?) b/", section)
+            if match:
+                filename = match.group(1)
+                if self._is_excluded(filename):
+                    print(f"[Debug] Filtering out excluded file: {filename}", file=sys.stderr)
+                    continue
+
+            filtered_sections.append(section)
+
+        return "".join(filtered_sections)
