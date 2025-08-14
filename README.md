@@ -125,6 +125,33 @@ The false positive filtering can also be tuned as needed for a given project's s
 
 Follow the Quick Start guide above. The action handles all dependencies automatically.
 
+### GitLab CI
+
+To run the security review in GitLab CI, add the following job to your `.gitlab-ci.yml`:
+
+```yaml
+security_review:
+  image: python:3.10
+  variables:
+    CLAUDE_API_KEY: $CLAUDE_API_KEY
+    GITLAB_TOKEN: $GITLAB_TOKEN
+  script:
+    - pip install -r claudecode/requirements.txt
+    - python -m claudecode.audit
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+```
+
+Required environment variables:
+
+- `CLAUDE_API_KEY` – Anthropic API key used for analysis.
+- `GITLAB_TOKEN` – personal access token with API scope to post merge request comments.
+- `CI_PROJECT_ID` and `CI_MERGE_REQUEST_IID` – provided by GitLab to identify the merge request being scanned.
+
+Optional configuration:
+
+- `EXCLUDE_DIRECTORIES` – comma-separated list of directory paths to skip during the scan.
+
 ### Local Development
 
 To run the security scanner locally against a specific PR, see the [evaluation framework documentation](claudecode/evals/README.md).
