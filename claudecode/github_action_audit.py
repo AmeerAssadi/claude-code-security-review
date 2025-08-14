@@ -9,7 +9,7 @@ import sys
 import json
 import subprocess
 import requests
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 from pathlib import Path
 import re
 import time 
@@ -26,6 +26,7 @@ from claudecode.constants import (
     SUBPROCESS_TIMEOUT
 )
 from claudecode.logger import get_logger
+from claudecode.gitlab_ci_client import GitLabCIClient
 
 logger = get_logger(__name__)
 
@@ -346,51 +347,69 @@ class SimpleClaudeRunner:
 
 
 def get_environment_config() -> Tuple[str, int]:
-    """Get and validate environment configuration.
-    
+    """Get and validate environment configuration for GitHub or GitLab.
+
     Returns:
-        Tuple of (repo_name, pr_number)
-        
+        Tuple of (repo_name, mr_number)
+
     Raises:
         ConfigurationError: If required environment variables are missing or invalid
     """
+
+    # GitLab CI environment
+    project_id = os.environ.get('CI_PROJECT_ID')
+    mr_iid_str = os.environ.get('CI_MERGE_REQUEST_IID')
+    if project_id and mr_iid_str:
+        try:
+            mr_number = int(mr_iid_str)
+        except ValueError:
+            raise ConfigurationError(f'Invalid MR_NUMBER: {mr_iid_str}')
+        os.environ['MR_NUMBER'] = str(mr_number)
+        return project_id, mr_number
+
+    # Default to GitHub Actions environment
     repo_name = os.environ.get('GITHUB_REPOSITORY')
-    pr_number_str = os.environ.get('PR_NUMBER')
-    
+    mr_number_str = os.environ.get('MR_NUMBER') or os.environ.get('PR_NUMBER')
+
     if not repo_name:
         raise ConfigurationError('GITHUB_REPOSITORY environment variable required')
-    
-    if not pr_number_str:
-        raise ConfigurationError('PR_NUMBER environment variable required')
-    
+
+    if not mr_number_str:
+        raise ConfigurationError('MR_NUMBER (PR_NUMBER) environment variable required')
+
     try:
-        pr_number = int(pr_number_str)
+        mr_number = int(mr_number_str)
     except ValueError:
-        raise ConfigurationError(f'Invalid PR_NUMBER: {pr_number_str}')
-        
-    return repo_name, pr_number
+        raise ConfigurationError(f'Invalid MR_NUMBER: {mr_number_str}')
+
+    os.environ['MR_NUMBER'] = str(mr_number)
+    return repo_name, mr_number
 
 
-def initialize_clients() -> Tuple[GitHubActionClient, SimpleClaudeRunner]:
-    """Initialize GitHub and Claude clients.
-    
+def initialize_clients() -> Tuple[Union[GitHubActionClient, GitLabCIClient], SimpleClaudeRunner]:
+    """Initialize SCM and Claude clients.
+
     Returns:
-        Tuple of (github_client, claude_runner)
-        
+        Tuple of (repo_client, claude_runner)
+
     Raises:
         ConfigurationError: If client initialization fails
     """
+
     try:
-        github_client = GitHubActionClient()
+        if os.environ.get('CI_PROJECT_ID') and os.environ.get('CI_MERGE_REQUEST_IID'):
+            repo_client: Union[GitHubActionClient, GitLabCIClient] = GitLabCIClient()
+        else:
+            repo_client = GitHubActionClient()
     except Exception as e:
-        raise ConfigurationError(f'Failed to initialize GitHub client: {str(e)}')
-    
+        raise ConfigurationError(f'Failed to initialize repository client: {str(e)}')
+
     try:
         claude_runner = SimpleClaudeRunner()
     except Exception as e:
         raise ConfigurationError(f'Failed to initialize Claude runner: {str(e)}')
-        
-    return github_client, claude_runner
+
+    return repo_client, claude_runner
 
 
 def initialize_findings_filter(custom_filtering_instructions: Optional[str] = None) -> FindingsFilter:
@@ -453,16 +472,16 @@ def run_security_audit(claude_runner: SimpleClaudeRunner, prompt: str) -> Dict[s
     return results
 
 
-def apply_findings_filter(findings_filter, original_findings: List[Dict[str, Any]], 
-                         pr_context: Dict[str, Any], github_client: GitHubActionClient) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+def apply_findings_filter(findings_filter, original_findings: List[Dict[str, Any]],
+                         pr_context: Dict[str, Any], repo_client) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     """Apply findings filter to reduce false positives.
-    
+
     Args:
         findings_filter: Filter instance
         original_findings: Original findings from audit
         pr_context: PR context information
-        github_client: GitHub client with exclusion logic
-        
+        repo_client: SCM client with exclusion logic
+
     Returns:
         Tuple of (kept_findings, excluded_findings, analysis_summary)
     """
@@ -470,7 +489,7 @@ def apply_findings_filter(findings_filter, original_findings: List[Dict[str, Any
     filter_success, filter_results, filter_stats = findings_filter.filter_findings(
         original_findings, pr_context
     )
-    
+
     if filter_success:
         kept_findings = filter_results.get('filtered_findings', [])
         excluded_findings = filter_results.get('excluded_findings', [])
@@ -480,41 +499,41 @@ def apply_findings_filter(findings_filter, original_findings: List[Dict[str, Any
         kept_findings = original_findings
         excluded_findings = []
         analysis_summary = {}
-    
+
     # Apply final directory exclusion filtering
     final_kept_findings = []
     directory_excluded_findings = []
-    
+
     for finding in kept_findings:
-        if _is_finding_in_excluded_directory(finding, github_client):
+        if _is_finding_in_excluded_directory(finding, repo_client):
             directory_excluded_findings.append(finding)
         else:
             final_kept_findings.append(finding)
-    
+
     # Update excluded findings list
     all_excluded_findings = excluded_findings + directory_excluded_findings
-    
+
     # Update analysis summary with directory filtering stats
     analysis_summary['directory_excluded_count'] = len(directory_excluded_findings)
-    
+
     return final_kept_findings, all_excluded_findings, analysis_summary
 
 
-def _is_finding_in_excluded_directory(finding: Dict[str, Any], github_client: GitHubActionClient) -> bool:
+def _is_finding_in_excluded_directory(finding: Dict[str, Any], repo_client) -> bool:
     """Check if a finding references a file in an excluded directory.
-    
+
     Args:
         finding: Security finding dictionary
-        github_client: GitHub client with exclusion logic
-        
+        repo_client: SCM client with exclusion logic
+
     Returns:
         True if finding should be excluded, False otherwise
     """
     file_path = finding.get('file', '')
     if not file_path:
         return False
-    
-    return github_client._is_excluded(file_path)
+
+    return repo_client._is_excluded(file_path)
 
 
 def main():
@@ -551,7 +570,7 @@ def main():
         
         # Initialize components
         try:
-            github_client, claude_runner = initialize_clients()
+            repo_client, claude_runner = initialize_clients()
         except ConfigurationError as e:
             print(json.dumps({'error': str(e)}))
             sys.exit(EXIT_CONFIGURATION_ERROR)
@@ -571,10 +590,14 @@ def main():
         
         # Get PR data
         try:
-            pr_data = github_client.get_pr_data(repo_name, pr_number)
-            pr_diff = github_client.get_pr_diff(repo_name, pr_number)
+            if isinstance(repo_client, GitLabCIClient):
+                pr_data = repo_client.get_mr_data(repo_name, pr_number)
+                pr_diff = repo_client.get_mr_diff(repo_name, pr_number)
+            else:
+                pr_data = repo_client.get_pr_data(repo_name, pr_number)
+                pr_diff = repo_client.get_pr_diff(repo_name, pr_number)
         except Exception as e:
-            print(json.dumps({'error': f'Failed to fetch PR data: {str(e)}'}))
+            print(json.dumps({'error': f'Failed to fetch MR data: {str(e)}'}))
             sys.exit(EXIT_GENERAL_ERROR)
                 
         # Generate security audit prompt
@@ -605,12 +628,12 @@ def main():
             'repo_name': repo_name,
             'pr_number': pr_number,
             'title': pr_data.get('title', ''),
-            'description': pr_data.get('body', '')
+            'description': pr_data.get('body', pr_data.get('description', ''))
         }
         
         # Apply findings filter (including final directory exclusion)
         kept_findings, excluded_findings, analysis_summary = apply_findings_filter(
-            findings_filter, original_findings, pr_context, github_client
+            findings_filter, original_findings, pr_context, repo_client
         )
         
         # Prepare output

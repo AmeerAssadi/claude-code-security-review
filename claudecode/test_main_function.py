@@ -53,7 +53,7 @@ class TestMainFunction:
             
             captured = capsys.readouterr()
             output = json.loads(captured.out)
-            assert 'Invalid PR_NUMBER' in output['error']
+            assert 'Invalid MR_NUMBER' in output['error']
     
     @patch('claudecode.github_action_audit.GitHubActionClient')
     def test_main_github_client_init_failure(self, mock_client_class, capsys):
@@ -72,7 +72,7 @@ class TestMainFunction:
             
             captured = capsys.readouterr()
             output = json.loads(captured.out)
-            assert 'Failed to initialize GitHub client' in output['error']
+            assert 'Failed to initialize repository client' in output['error']
             assert 'Token invalid' in output['error']
     
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
@@ -206,7 +206,7 @@ class TestMainFunction:
             
             captured = capsys.readouterr()
             output = json.loads(captured.out)
-            assert 'Failed to fetch PR data' in output['error']
+            assert 'Failed to fetch MR data' in output['error']
             assert 'API error' in output['error']
     
     @patch('pathlib.Path.cwd')

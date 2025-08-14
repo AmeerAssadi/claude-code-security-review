@@ -44,8 +44,8 @@ class TestHelperFunctions:
         with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}, clear=True):
             with pytest.raises(ConfigurationError) as exc_info:
                 get_environment_config()
-            
-            assert "PR_NUMBER environment variable required" in str(exc_info.value)
+
+            assert "MR_NUMBER" in str(exc_info.value)
     
     def test_get_environment_config_invalid_pr_number(self):
         """Test error when PR_NUMBER is not a valid integer."""
@@ -55,8 +55,8 @@ class TestHelperFunctions:
         }):
             with pytest.raises(ConfigurationError) as exc_info:
                 get_environment_config()
-            
-            assert "Invalid PR_NUMBER" in str(exc_info.value)
+
+            assert "Invalid MR_NUMBER" in str(exc_info.value)
     
     @patch('claudecode.github_action_audit.GitHubActionClient')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
@@ -82,7 +82,7 @@ class TestHelperFunctions:
         with pytest.raises(ConfigurationError) as exc_info:
             initialize_clients()
         
-        assert "Failed to initialize GitHub client" in str(exc_info.value)
+        assert "Failed to initialize repository client" in str(exc_info.value)
         assert "GitHub API error" in str(exc_info.value)
     
     @patch('claudecode.github_action_audit.GitHubActionClient')
