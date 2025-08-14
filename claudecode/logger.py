@@ -20,17 +20,17 @@ def get_logger(name: str) -> logging.Logger:
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
         
-        # Get repo and PR number from environment for prefix
+        # Get repo and MR/PR number from environment for prefix
         repo_name = os.environ.get('GITHUB_REPOSITORY', '')
-        pr_number = os.environ.get('PR_NUMBER', '')
-        
+        mr_number = os.environ.get('MR_NUMBER') or os.environ.get('PR_NUMBER', '')
+
         # Build prefix
-        if repo_name and pr_number:
-            prefix = f"[{repo_name}#{pr_number}]"
+        if repo_name and mr_number:
+            prefix = f"[{repo_name}#{mr_number}]"
         elif repo_name:
             prefix = f"[{repo_name}]"
-        elif pr_number:
-            prefix = f"[PR#{pr_number}]"
+        elif mr_number:
+            prefix = f"[MR#{mr_number}]"
         else:
             prefix = ""
         
@@ -44,5 +44,5 @@ def get_logger(name: str) -> logging.Logger:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
-    
+
     return logger

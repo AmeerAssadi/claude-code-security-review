@@ -30,15 +30,16 @@ class TestClaudeCodeAudit:
         output = json.loads(captured.out)
         assert 'GITHUB_REPOSITORY' in output['error']
         
-        # Test missing PR_NUMBER
+        # Test missing MR/PR number
         monkeypatch.setenv('GITHUB_REPOSITORY', 'test/repo')
         monkeypatch.delenv('PR_NUMBER', raising=False)
+        monkeypatch.delenv('MR_NUMBER', raising=False)
         with pytest.raises(SystemExit) as exc_info:
             github_action_audit.main()
         assert exc_info.value.code == 2  # EXIT_CONFIGURATION_ERROR
         captured = capsys.readouterr()
         output = json.loads(captured.out)
-        assert 'PR_NUMBER' in output['error']
+        assert 'MR_NUMBER' in output['error']
     
     def test_invalid_pr_number(self, monkeypatch, capsys):
         """Test behavior with invalid PR number."""
@@ -53,7 +54,7 @@ class TestClaudeCodeAudit:
         assert exc_info.value.code == 2  # EXIT_CONFIGURATION_ERROR
         captured = capsys.readouterr()
         output = json.loads(captured.out)
-        assert 'Invalid PR_NUMBER' in output['error']
+        assert 'Invalid MR_NUMBER' in output['error']
 
 
 class TestEnvironmentSetup:
@@ -70,7 +71,7 @@ class TestEnvironmentSetup:
         valid, error = runner.validate_claude_available()
         # Note: This will fail if claude CLI is not installed, which is OK
         if not valid and 'not installed' in error:
-            pytest.fail("Claude CLI not installed")
+            pytest.skip("Claude CLI not installed")
         
         # Test without API key
         monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
